@@ -1,0 +1,133 @@
+'''
+The MIT License (MIT)
+
+Copyright (c) 2014 Patrick Olsen
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+Author: Patrick Olsen
+'''
+
+from __future__ import division
+import base64, binascii, struct, sys
+import argparse
+from Registry import Registry
+from datetime import datetime, timedelta
+import csv
+
+def gethostInfo(reg_soft):
+    entries = ["Wow6432Node\\LANDesk\\amtmon",
+                "LANDesk\\amtmon"]
+    for en in entries:
+        try:
+            amtmon = reg_soft.open(en)
+            if amtmon.value("ip").value() != None:
+                ip_addr = amtmon.value("ip").value()
+            else:
+                ip_addr = "None"
+            if amtmon.value("hostname").value() != None:
+                host = amtmon.value("hostname").value()
+            else:
+                host = "None"
+
+        except Registry.RegistryKeyNotFoundException as e:
+            host = "None"
+            ip_addr = "None"
+
+    return host, ip_addr
+
+def getMonitorLog(reg_soft):
+    dic_Landesk = {}
+    entries = ["Wow6432Node\LANDesk\ManagementSuite\WinClient\SoftwareMonitoring\MonitorLog",
+               "LANDesk\\ManagementSuite\\WinClient\\SoftwareMonitoring\\MonitorLog"]
+    
+    for en in entries:
+        try:
+            logon_hist = reg_soft.open(en)
+            for sks in logon_hist.subkeys():
+                key = reg_soft.open(en+'\\%s' % (sks.name()))
+                app_name = key.name()
+                key_time = key.timestamp()
+                try:
+                    time_convert = struct.unpack("<Q", key.value("Last Started").value())[0]
+                    # http://stackoverflow.com/questions/4869769/convert-64-bit-windows-date-time-in-python
+                    # Convert this to a function and call it.
+                    us = int(time_convert) / 10
+                    last_run = datetime(1601,1,1) + timedelta(microseconds=us)
+                except: 
+                    last_run = "None"
+                try:
+                    time_convert = struct.unpack("<Q", key.value("First Started").value())[0]
+                    # Convert this to a function and call it.
+                    us = int(time_convert) / 10
+                    first_run = datetime(1601,1,1) + timedelta(microseconds=us)
+                except:
+                    first_run = "None"
+                try:
+                    last_duration = struct.unpack("<Q", key.value("Last Duration").value())[0]
+                    lduration = last_duration / 10000000
+                except:
+                    lduration = "None"
+                try:
+                    total_duration = struct.unpack("<Q", key.value("Total Duration").value())[0]
+                    tduration = total_duration / 10000000
+                except:
+                    tduration = "None"
+                try:
+                    current_user = key.value("Current User").value()
+                except:
+                    current_user = "None"
+                try:
+                    run_runs = key.value("Total Runs").value()
+                except:
+                    run_runs = "None"
+
+                dic_Landesk[app_name] = str(run_runs), str(key_time), str(first_run), str(last_run), \
+                                        str(lduration), str(tduration), current_user
+            return dic_Landesk
+
+        except Registry.RegistryKeyNotFoundException as e:
+            pass
+
+def outputResults(output, hosts):
+    LDwriter = csv.writer(sys.stdout)
+    LDwriter.writerow(["Last Run", "First Run", "Application Name", "Host Name", "IP Address", "Total Runs", "Last Write", \
+                        "Last Running Duration", "Total Running Duration", \
+                        "Current User"])
+    for key, value in output.items():
+        LDwriter.writerow([value[3], value[2], key, hosts[0], hosts[1], value[0], value[1], \
+                            value[4], value[5], value[6]])
+
+def main():
+    parser = argparse.ArgumentParser(description='Parse the Landesk Entries in the Registry.')
+    parser.add_argument('-s', '--software', help='Path to the SOFTWARE hive you want parsed.')
+
+    args = parser.parse_args()
+
+    if args.software:
+        reg_soft = Registry.Registry(args.software)
+    else:
+        print("You need to specify a SOFTWARE hive.")
+
+    hosts = gethostInfo(reg_soft)
+    output = getMonitorLog(reg_soft)
+    outputResults(output, hosts)
+
+if __name__ == "__main__":
+    main()
